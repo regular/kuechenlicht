@@ -2,9 +2,17 @@
 /// Programmable color ramps for the LED drivers on the LED Node.
 // 2011-10-26 <jc@wippler.nl> http://opensource.org/licenses/mit-license.php
 
+
+// circuit for light switch:
+// phototransitor with 0.47uF in parallel for debouncing
+// pulled down via 1Mohms connected to digital I/O on Jee Port 4
+
 #include <JeeLib.h>
 #include <EEPROM.h>
 #include <avr/sleep.h>
+
+#define JEE_ID 1
+#define JEE_GROUP 19
 
 #define EEPROM_BASE 0x100 // store ramps starting at this offset
 #define RAMP_LIMIT 100    // room for ramps 0..99, stored in EEPROM
@@ -41,11 +49,13 @@ static Ramp stdRamps[] = {
   {   7,   1,   0, 0, 0 }, // 9: instant faint red'ish yellow
 };
 
+bool dark;
+
 static void setLeds () {
   // set to bits 30..23, but rounded by one extra bit (i.e. bit 22)
-  analogWrite(LED_R, (byte) (((word) (now[0] >> 22) + 1) >> 1));
-  analogWrite(LED_G, (byte) (((word) (now[1] >> 22) + 1) >> 1));
-  analogWrite(LED_B, (byte) (((word) (now[2] >> 22) + 1) >> 1));
+  analogWrite(LED_R, dark ? 0 : (byte) (((word) (now[0] >> 22) + 1) >> 1));
+  analogWrite(LED_G, dark ? 0 : (byte) (((word) (now[1] >> 22) + 1) >> 1));
+  analogWrite(LED_B, dark ? 0 : (byte) (((word) (now[2] >> 22) + 1) >> 1));
 }
 
 static void useRamp (const void* ptr) {
@@ -80,6 +90,8 @@ static void saveRamp (byte pos, const void* data) {
   }
 }
 
+Port lightSwitch(4);
+
 void setup () {
   // fix timer 1 so it also runs in fast PWM mode, to match timer 0
   bitSet(TCCR1B, WGM12);
@@ -87,14 +99,41 @@ void setup () {
   for (byte i = 0; i < sizeof stdRamps / sizeof *stdRamps; ++i)
     saveRamp(i, stdRamps + i);
   // intialize wireless
-  rf12_initialize(1, RF12_868MHZ, 19);
+  rf12_initialize(JEE_ID, RF12_868MHZ, JEE_GROUP);
   // test code: start up with ramp #1
-  //loadRamp(1);
+  loadRamp(6);
+
+  Serial.begin(57600);
+  Serial.println("\nkuechenlicht");
+
+  lightSwitch.mode(INPUT);
 }
+
+
+const char buffer[256];
+
+int countDown;
 
 void loop () {
   set_sleep_mode(SLEEP_MODE_IDLE);
   sleep_mode();
+
+  //sprintf(buffer, "a: %d  d: %d", (int)lightSwitch.anaRead(), (int)lightSwitch.digiRead());
+  bool on = !lightSwitch.digiRead();
+  if (on) {
+    dark = false;
+    setLeds();
+    countDown = 100;
+  } else {
+    if (--countDown<0) {
+      countDown = 0;
+      dark = true;
+      setLeds();
+    }
+  }
+
+  sprintf(buffer, "on: %d, dark: %d", (int)on, (int)dark);
+  Serial.println(buffer);
 
   if (timer.poll(10)) {
     if (duration > 0) {
